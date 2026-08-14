@@ -172,6 +172,17 @@
   }
   .measure-ctx{ font-family:system-ui,-apple-system,'PingFang TC','Microsoft JhengHei','Heiti TC',sans-serif; font-size:12.3px; line-height:1.5; color:#111; }
   .ps-pagenum{font-size:9.5px; color:#444; margin-bottom:6px;}
+  .ps-seal{
+    position:absolute; right:5mm;
+    display:flex; flex-direction:column; align-items:center;
+    color:#c0272d; border:1.6px solid #c0272d; border-radius:5px;
+    padding:10px 6px; opacity:.8; background:rgba(255,255,255,.5);
+  }
+  .ps-seal span{font-size:15px; font-weight:800; line-height:1.5; font-family:'Microsoft JhengHei','PingFang TC',sans-serif;}
+  /* 章的上半部貼在本頁最下緣,下半部超出頁面範圍(被 .print-sheet 的 overflow:hidden 裁掉) */
+  .ps-seal-bottom{ bottom:0; transform:translateY(50%); }
+  /* 章的下半部貼在下一頁最上緣,上半部超出頁面範圍(被裁掉),與上一頁的上半部剛好接續 */
+  .ps-seal-top{ top:0; transform:translateY(-50%); }
   .ps-header2{display:flex; align-items:flex-start; gap:16px; margin-bottom:4px;}
   .ps-header2 img{height:50px; width:auto; display:block; flex:none; margin-top:30px;}
   .ps-cinfo{padding-top:6px;}
@@ -1666,6 +1677,11 @@ function measureHeights(htmlList){
   return heights;
 }
 
+function shortCompanyName(){
+  const n = (catalog.companyInfo && catalog.companyInfo.name) || '';
+  return n.replace(/(工業股份有限公司|股份有限公司|有限公司|企業社)$/,'') || n;
+}
+
 function metaBlockHtml(quote){
   const c = catalog.companyInfo;
   const quoterEmail = quote.quoterEmail || c.email;
@@ -1776,12 +1792,19 @@ async function openPrintPreview(q){
   </div>`;
   const pages = await buildPages(quote);
   const total = pages.length;
-  const pagesHtml = pages.map((atomsArr, i) => `
+  const sealChars = shortCompanyName().split('').map(ch=>`<span>${escapeHtml(ch)}</span>`).join('');
+  const pagesHtml = pages.map((atomsArr, i) => {
+    const topSeal = i > 0 ? `<div class="ps-seal ps-seal-top">${sealChars}</div>` : '';
+    const bottomSeal = i < total - 1 ? `<div class="ps-seal ps-seal-bottom">${sealChars}</div>` : '';
+    return `
     <div class="print-sheet">
+      ${topSeal}
+      ${bottomSeal}
       <div class="ps-pagenum">第 ${i+1} 頁,共 ${total} 頁&nbsp;&nbsp;|&nbsp;&nbsp;報價單號:${escapeHtml(quote.quoteNo||'')}</div>
       ${atomsArr.join('')}
     </div>
-  `).join('');
+  `;
+  }).join('');
   const html = `
   <div class="modal-backdrop" onclick="if(event.target===this) closeModal()">
     <div style="width:100%;">
