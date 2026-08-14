@@ -163,17 +163,19 @@
   .modal-backdrop{position:fixed; inset:0; background:rgba(15,20,28,.6); z-index:300; display:flex; align-items:flex-start; justify-content:center; padding:18px; overflow:auto;}
   .modal-toolbar{position:sticky; top:0; display:flex; justify-content:flex-end; gap:10px; max-width:210mm; margin:0 auto 12px; z-index:5; flex-wrap:wrap;}
   .print-pages{max-width:100%;}
+  /* 列印文件一律用系統內建中文字型(不依賴網路字型),避免字型非同步載入造成分頁量測失準 */
   .print-sheet{
-    background:#fff; width:210mm; min-height:297mm; max-width:100%;
+    background:#fff; width:210mm; height:297mm; max-width:100%; overflow:hidden;
     margin:0 auto 22px; padding:14mm 16mm; box-shadow:0 20px 60px rgba(0,0,0,.35);
+    font-family:system-ui,-apple-system,'PingFang TC','Microsoft JhengHei','Heiti TC',sans-serif;
     font-size:12.3px; color:#111; line-height:1.5; position:relative; box-sizing:border-box;
   }
-  .measure-ctx{ font-family:'Noto Sans TC',system-ui,sans-serif; font-size:12.3px; line-height:1.5; color:#111; }
+  .measure-ctx{ font-family:system-ui,-apple-system,'PingFang TC','Microsoft JhengHei','Heiti TC',sans-serif; font-size:12.3px; line-height:1.5; color:#111; }
   .ps-pagenum{font-size:9.5px; color:#444; margin-bottom:6px;}
   .ps-header2{display:flex; align-items:flex-start; gap:16px; margin-bottom:4px;}
   .ps-header2 img{height:58px; width:auto; display:block; flex:none; margin-top:1px;}
   .ps-cinfo{padding-top:2px;}
-  .ps-cinfo .cname{font-family:'Noto Serif TC',serif; font-weight:900; font-size:17px; margin-bottom:5px; letter-spacing:.5px;}
+  .ps-cinfo .cname{font-family:'PMingLiU','Songti TC',serif; font-weight:900; font-size:17px; margin-bottom:5px; letter-spacing:.5px;}
   .ps-cinfo .cline{font-size:10.5px; color:#333; line-height:1.65;}
   .ps-doc-title{text-align:center; font-size:17px; font-weight:800; letter-spacing:14px; padding-left:14px; margin:8px 0 14px;}
   .ps-meta{display:grid; grid-template-columns:1fr 1fr; border:1.4px solid #111; margin-bottom:14px;}
@@ -200,21 +202,28 @@
 
   @page{ size:A4; margin:0; }
   @media print{
+    /* 關鍵修正:用 display:none 讓其他畫面真正離開版面(而非 visibility:hidden 讓它仍佔位),
+       並讓報價單維持在正常文件流中,瀏覽器的分頁引擎才能正確依 page-break-after 分頁,
+       不會把所有頁面內容擠壓成一長條、切出多餘或重複的頁面。 */
     body{background:#fff !important;}
-    body *{visibility:hidden;}
-    .print-pages, .print-pages *{visibility:visible;}
-    .print-pages{position:absolute; top:0; left:0; width:100%; margin:0;}
-    .print-sheet{box-shadow:none; margin:0; page-break-after:always; break-after:page;}
+    body > *{ display:none !important; }
+    #modalRoot{ display:block !important; }
+    #modalRoot .modal-backdrop{
+      position:static !important; inset:auto !important; background:none !important;
+      padding:0 !important; display:block !important; overflow:visible !important;
+    }
+    .print-pages{ display:block !important; position:static !important; width:auto !important; margin:0 !important; }
+    .print-sheet{box-shadow:none; margin:0 auto; page-break-after:always; break-after:page;}
     .print-sheet:last-child{page-break-after:auto; break-after:auto;}
     .ps-box, .ps-sign, .ps-header2, .ps-meta{page-break-inside:avoid; break-inside:avoid;}
     .no-print{display:none !important;}
   }
   @media (max-width:820px){
-    .print-sheet{padding:9mm 8mm; font-size:11.5px;}
+    .print-sheet{padding:9mm 8mm; font-size:11.5px; transform-origin:top center;}
   }
 
   /* json modal */
-  .json-modal .print-sheet{width:640px; min-height:auto;}
+  .json-modal .print-sheet{width:640px; height:auto; min-height:auto; overflow:visible;}
   .json-box{width:100%; height:280px; font-family:ui-monospace,Menlo,Consolas,monospace; font-size:11.5px;}
 
   footer.app-foot{max-width:1440px;margin:0 auto;padding:0 20px 40px;color:#9fb3c8;font-size:11.5px;}
@@ -537,7 +546,7 @@ function defaultCatalog(){
       tel:'886-49-273 0888',
       fax:'886-49-273 0999',
       web:'http://www.probar.com.tw',
-      email:'prosales@probar.com.tw'
+      email:'business@probar.com.tw'
     },
     defaultTerms:[
       '交易條件:FOR,(國外裝機、服務費用、裝箱費另計)。',
@@ -1628,7 +1637,13 @@ const MM_PX = 96/25.4;
 const PAGE_H_MM = 297;
 const PAD_V_MM = 14;
 const CONTENT_W_MM = 210 - 16*2;
-const CAPACITY_PX = (PAGE_H_MM - PAD_V_MM*2) * MM_PX - 30; /* 30px 緩衝給頁碼列 */
+const CAPACITY_PX = (PAGE_H_MM - PAD_V_MM*2) * MM_PX - 60; /* 60px 緩衝給頁碼列 + 跨瀏覽器/列印引擎的誤差保護 */
+
+async function fontsReady(){
+  try{
+    if(document.fonts && document.fonts.ready){ await document.fonts.ready; }
+  }catch(e){ /* 忽略,不支援就直接繼續 */ }
+}
 
 function measureHeights(htmlList){
   const stage = document.createElement('div');
@@ -1721,7 +1736,8 @@ function tailBlockHtml(quote, grandTotal, grandTotalUsd, showGrand){
   </div>`;
 }
 
-function buildPages(quote){
+async function buildPages(quote){
+  await fontsReady();
   const grandTotal = quoteTotal(quote);
   const grandTotalUsd = quoteTotalUsd(quote);
   const showGrand = (quote.sections.length>1) || quote.sections.some(s=>s.items.length>1);
@@ -1748,13 +1764,17 @@ function buildPages(quote){
   return pages;
 }
 
-function openPrintPreview(q){
+async function openPrintPreview(q){
   const quote = q || currentQuote;
   if(!quote.sections || !quote.sections.length){
     alert('請先加入至少一個標題與報價項目');
     return;
   }
-  const pages = buildPages(quote);
+  document.getElementById('modalRoot').innerHTML = `
+  <div class="modal-backdrop">
+    <div class="print-sheet" style="display:flex;align-items:center;justify-content:center;color:#888;">產生預覽中...</div>
+  </div>`;
+  const pages = await buildPages(quote);
   const total = pages.length;
   const pagesHtml = pages.map((atomsArr, i) => `
     <div class="print-sheet">
