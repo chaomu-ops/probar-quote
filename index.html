@@ -21,15 +21,17 @@
     --danger:#b23a2e;
     --danger-soft:#fbeae7;
     --shadow: 0 1px 2px rgba(15,33,56,.06), 0 8px 24px -12px rgba(15,33,56,.18);
+    --topbar-h: 132px;
     font-size:15px;
   }
   *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
   html,body{margin:0;padding:0;}
   body{
     font-family:'Noto Sans TC', system-ui, -apple-system, 'PingFang TC', 'Microsoft JhengHei', sans-serif;
-    background: linear-gradient(180deg,#0f2138 0px, #0f2138 132px, var(--paper) 132px);
+    background: var(--paper);
     color:var(--ink);
     min-height:100vh;
+    padding-top:var(--topbar-h,132px);
   }
   ::selection{background:var(--accent);color:#fff;}
   input,textarea,select,button{font-family:inherit;font-size:14px;}
@@ -56,7 +58,8 @@
   /* ---------- shell ---------- */
   .topbar{
     min-height:132px; padding:14px 28px; display:flex; align-items:center; justify-content:space-between; gap:20px; flex-wrap:wrap;
-    position:sticky; top:0; z-index:40;
+    position:fixed; top:0; left:0; right:0; width:100%; z-index:40;
+    background: linear-gradient(135deg, var(--navy), var(--navy2));
   }
   .brand{display:flex;align-items:center;gap:14px;}
   .brand-mark{width:46px;height:46px;flex:none;}
@@ -132,8 +135,8 @@
   .term-line{display:flex; gap:8px; align-items:center; margin-bottom:6px;}
   .term-line .idx{width:20px; flex:none; color:var(--steel); font-size:12px; text-align:right;}
 
-  .layout-2col{display:grid; grid-template-columns:340px 1fr; gap:18px; align-items:start;}
-  @media (max-width:980px){ .layout-2col{grid-template-columns:1fr;} .cols-2,.cols-3,.cols-4{grid-template-columns:1fr;} }
+  .layout-2col{display:grid; grid-template-columns:340px 1fr; gap:18px; align-items:start; min-height:calc(100vh - var(--topbar-h,132px) - 40px);}
+  @media (max-width:980px){ .layout-2col{grid-template-columns:1fr; min-height:0;} .cols-2,.cols-3,.cols-4{grid-template-columns:1fr;} }
   @media (max-width:640px){
     :root{font-size:14px;}
     .topbar{padding:12px 16px;}
@@ -142,7 +145,7 @@
     .totals{justify-content:flex-start;}
   }
   .sticky-side{position:relative;}
-  @media (min-width:981px){ .sticky-side{position:sticky; top:160px; max-height:calc(100vh - 180px); overflow-y:auto;} }
+  @media (min-width:981px){ .sticky-side{position:sticky; top:calc(var(--topbar-h,132px) + 20px); max-height:calc(100vh - var(--topbar-h,132px) - 170px); overflow-y:auto;} }
 
   .section-card{border:1.5px solid var(--line); border-radius:12px; margin-bottom:14px; overflow:hidden;}
   .section-card.is-target{border-color:var(--accent);}
@@ -806,6 +809,14 @@ function renderTabs(){
 function switchTab(id){ TAB = id; renderAll(); window.scrollTo({top:0, behavior:'smooth'}); }
 
 function renderAll(){
+  const prevSideScroll = (() => { const el = document.querySelector('.sticky-side'); return el ? el.scrollTop : null; })();
+  const prevWinScroll = window.scrollY;
+  const activeEl = document.activeElement;
+  const activeId = (activeEl && activeEl.id) ? activeEl.id : null;
+  const hasSelection = activeEl && typeof activeEl.selectionStart === 'number';
+  const selStart = hasSelection ? activeEl.selectionStart : null;
+  const selEnd = hasSelection ? activeEl.selectionEnd : null;
+
   renderTabs();
   const app = document.getElementById('app');
   if(!loaded){ app.innerHTML = `<div class="empty">載入中...</div>`; return; }
@@ -814,6 +825,22 @@ function renderAll(){
   else if(TAB==='models') app.innerHTML = renderModelsTab();
   else if(TAB==='accessories') app.innerHTML = renderAccessoriesTab();
   else if(TAB==='settings') app.innerHTML = renderSettingsTab();
+
+  if(prevSideScroll !== null){
+    const newSide = document.querySelector('.sticky-side');
+    if(newSide) newSide.scrollTop = prevSideScroll;
+  }
+  window.scrollTo(window.scrollX, prevWinScroll);
+
+  if(activeId){
+    const restored = document.getElementById(activeId);
+    if(restored){
+      restored.focus();
+      if(selStart !== null && restored.setSelectionRange){
+        try{ restored.setSelectionRange(selStart, selEnd); }catch(e){ /* 部分 input type 不支援,忽略即可 */ }
+      }
+    }
+  }
 }
 
 /* =========================================================
@@ -1116,7 +1143,7 @@ function renderCatalogPicker(){
     <div class="card sticky-side">
       <div class="card-head"><h2>商品目錄</h2><span class="hint">點 + 加入報價單</span></div>
       <div class="card-body">
-        <input class="catalog-search" placeholder="搜尋機型 / 規格..." value="${escapeHtml(catalogSearch)}" oninput="catalogSearch=this.value; renderAll();">
+        <input id="catalogSearchInput" class="catalog-search" placeholder="搜尋機型 / 規格..." value="${escapeHtml(catalogSearch)}" oninput="catalogSearch=this.value; renderAll();">
         ${targetInfo}
         ${seriesHtml}
         ${generalHtml}
@@ -1817,6 +1844,27 @@ async function openPrintPreview(q){
   </div>`;
   document.getElementById('modalRoot').innerHTML = html;
 }
+
+/* =========================================================
+   橫幅固定高度同步(topbar 改為 position:fixed 後,動態量測實際高度,
+   避免手機版換行變高時蓋住下方內容)
+========================================================= */
+function syncTopbarHeight(){
+  const el = document.querySelector('.topbar');
+  if(!el) return;
+  const h = el.offsetHeight;
+  if(h > 0) document.documentElement.style.setProperty('--topbar-h', h + 'px');
+}
+(function initTopbarSync(){
+  const el = document.querySelector('.topbar');
+  if(!el) return;
+  syncTopbarHeight();
+  if(typeof ResizeObserver !== 'undefined'){
+    new ResizeObserver(syncTopbarHeight).observe(el);
+  } else {
+    window.addEventListener('resize', syncTopbarHeight);
+  }
+})();
 
 /* =========================================================
    啟動
