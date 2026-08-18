@@ -514,6 +514,7 @@ async function loadAll(){
   } else {
     catalog = defaultCatalog();
   }
+  if(!catalog.customers) catalog.customers = []; /* 相容舊版雲端資料(尚無客戶管理欄位) */
   if(!QuoteStore) QuoteStore = buildMemoryQuoteStore();
   await QuoteStore.subscribe(arr=>{
     quotes = arr;
@@ -546,6 +547,7 @@ function migrateQuote(q){
   if(!q.targetSectionId) q.targetSectionId = (q.sections[0] && q.sections[0].id) || null;
   if(q.showUsd===undefined) q.showUsd = false;
   if(!q.quoterEmail) q.quoterEmail = (catalog.companyInfo && catalog.companyInfo.email) || '';
+  if(q.customerId===undefined) q.customerId = null;
   return q;
 }
 
@@ -571,6 +573,7 @@ function defaultCatalog(){
       '以上報價未稅。',
       '其他優惠不可併行。'
     ],
+    customers:[],
     installFees:[
       {id:genId('if'), label:'V、VS', ntd:7600, usd:300, rmb:1800},
       {id:genId('if'), label:'PRO80、P680、PRO80U', ntd:8000, usd:300, rmb:2000},
@@ -797,6 +800,7 @@ function defaultCatalog(){
 const TABS = [
   {id:'builder', label:'建立報價單'},
   {id:'quotes', label:'報價單管理'},
+  {id:'customers', label:'客戶管理'},
   {id:'models', label:'機型管理'},
   {id:'accessories', label:'配件管理'},
   {id:'settings', label:'系統設定'}
@@ -822,6 +826,7 @@ function renderAll(){
   if(!loaded){ app.innerHTML = `<div class="empty">載入中...</div>`; return; }
   if(TAB==='builder') app.innerHTML = renderBuilder();
   else if(TAB==='quotes') app.innerHTML = renderQuotesTab();
+  else if(TAB==='customers') app.innerHTML = renderCustomersTab();
   else if(TAB==='models') app.innerHTML = renderModelsTab();
   else if(TAB==='accessories') app.innerHTML = renderAccessoriesTab();
   else if(TAB==='settings') app.innerHTML = renderSettingsTab();
@@ -854,6 +859,7 @@ function blankQuote(){
     quoteNo: suggestQuoteNo(),
     date: d,
     to:'', attn:'', tel:'', fax:'', cno:'',
+    customerId: null,
     validDate: valid,
     quoterEmail: (catalog.companyInfo && catalog.companyInfo.email) || '',
     sections:[],
@@ -1238,6 +1244,18 @@ function renderBuilder(){
           </div>
           <hr class="rule">
           <div class="field-row cols-4">
+            <div style="grid-column:1 / -1;">
+              <label class="field">選擇既有客戶(選填,會自動帶入下方欄位)</label>
+              <div style="display:flex;gap:8px;">
+                <select onchange="selectCustomerForQuote(this.value)" style="flex:1;">
+                  <option value="">-- 手動輸入 --</option>
+                  ${catalog.customers.map(c=>`<option value="${c.id}" ${currentQuote.customerId===c.id?'selected':''}>${escapeHtml(c.code?c.code+' - ':'')}${escapeHtml(c.name)}</option>`).join('')}
+                </select>
+                <button class="btn-ghost btn-sm" style="white-space:nowrap;" onclick="saveCurrentAsCustomer()">＋ 另存為客戶</button>
+              </div>
+            </div>
+          </div>
+          <div class="field-row cols-4" style="margin-top:12px;">
             <div><label class="field">客戶 TO</label><input value="${escapeHtml(currentQuote.to)}" placeholder="公司/客戶名稱" onchange="updateQuoteField('to',this.value)"></div>
             <div><label class="field">聯絡人 Attn</label><input value="${escapeHtml(currentQuote.attn)}" onchange="updateQuoteField('attn',this.value)"></div>
             <div><label class="field">電話 Tel</label><input value="${escapeHtml(currentQuote.tel)}" onchange="updateQuoteField('tel',this.value)"></div>
@@ -1507,6 +1525,167 @@ function renderAccessoriesTab(){
     </div>
     ${blocks}
   `;
+}
+
+/* =========================================================
+   客戶管理 tab
+========================================================= */
+let customerSearch = '';
+let expandedCustomers = {};
+
+function addCustomer(){
+  const c = {id:genId('cust'), code:'', name:'新客戶', tel:'', fax:'', email:'', note:''};
+  catalog.customers.push(c);
+  saveCatalog(true);
+  expandedCustomers[c.id] = false;
+  renderAll();
+}
+function updateCustomerField(cid, field, value){
+  const c = catalog.customers.find(x=>x.id===cid);
+  if(!c) return;
+  c[field] = value;
+  saveCatalog(true);
+}
+function deleteCustomer(cid){
+  if(!confirm('確定刪除此客戶資料嗎?(不會刪除過去已儲存的報價單紀錄)')) return;
+  catalog.customers = catalog.customers.filter(x=>x.id!==cid);
+  saveCatalog();
+  renderAll();
+}
+function toggleCustomerHistory(cid){
+  expandedCustomers[cid] = !expandedCustomers[cid];
+  renderAll();
+}
+
+/* 取得某客戶的歷史報價項目(依 customerId 精準比對,若舊報價單沒有 customerId 則退而用客戶名稱比對) */
+function customerHistory(customer){
+  const rows = [];
+  quotes.forEach(q=>{
+    const matched = q.customerId ? (q.customerId === customer.id)
+      : (q.to && customer.name && q.to.trim() === customer.name.trim() && customer.name.trim() !== '');
+    if(!matched) return;
+    (q.sections||[]).forEach(sec=>{
+      (sec.items||[]).forEach(it=>{
+        rows.push({
+          quoteNo: q.quoteNo, date: q.date || '',
+          section: sec.title, name: it.name, spec: it.spec||'',
+          qty: it.qty, unit: it.unit||'', price: it.price
+        });
+      });
+    });
+  });
+  rows.sort((a,b)=>{
+    const nm = (a.name||'').localeCompare(b.name||'');
+    if(nm !== 0) return nm;
+    return (b.date||'').localeCompare(a.date||'');
+  });
+  return rows;
+}
+
+function renderCustomerHistoryPanel(customer){
+  const rows = customerHistory(customer);
+  if(!rows.length){
+    return `<div class="muted" style="padding:10px 4px;font-size:12.5px;">此客戶尚無任何歷史報價紀錄。</div>`;
+  }
+  return `
+    <div class="tbl-wrap">
+      <table class="tbl">
+        <thead><tr><th>機型</th><th>規格</th><th>數量</th><th>售價(NTD)</th><th>報價單號</th><th>日期</th><th>標題</th></tr></thead>
+        <tbody>
+          ${rows.map(r=>`
+            <tr>
+              <td>${escapeHtml(r.name)}</td>
+              <td>${escapeHtml(r.spec)}</td>
+              <td>${r.qty}${escapeHtml(r.unit)}</td>
+              <td class="num">NT$${fmtMoney(r.price)}</td>
+              <td>${escapeHtml(r.quoteNo)}</td>
+              <td>${escapeHtml(r.date)}</td>
+              <td>${escapeHtml(r.section)}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function customersMatch(c, q){
+  if(!q) return true;
+  q = q.toLowerCase();
+  return (c.name||'').toLowerCase().includes(q) || (c.code||'').toLowerCase().includes(q);
+}
+
+function renderCustomersTab(){
+  const list = catalog.customers.filter(c=>customersMatch(c, customerSearch));
+  const rows = list.map(c=>{
+    const open = !!expandedCustomers[c.id];
+    const histCount = customerHistory(c).length;
+    return `
+    <tr>
+      <td><input value="${escapeHtml(c.code)}" placeholder="例:886-CM046" onchange="updateCustomerField('${c.id}','code',this.value)"></td>
+      <td><input value="${escapeHtml(c.name)}" placeholder="客戶名稱" onchange="updateCustomerField('${c.id}','name',this.value)"></td>
+      <td><input value="${escapeHtml(c.tel)}" placeholder="聯絡電話" onchange="updateCustomerField('${c.id}','tel',this.value)"></td>
+      <td><input value="${escapeHtml(c.fax)}" placeholder="傳真" onchange="updateCustomerField('${c.id}','fax',this.value)"></td>
+      <td><input value="${escapeHtml(c.email)}" placeholder="Email" onchange="updateCustomerField('${c.id}','email',this.value)"></td>
+      <td>
+        <div class="row-actions">
+          <button class="btn-ghost btn-sm" onclick="toggleCustomerHistory('${c.id}')">${open?'收合':'歷史報價'}(${histCount})</button>
+          <button class="btn-danger btn-sm" onclick="deleteCustomer('${c.id}')">刪除</button>
+        </div>
+      </td>
+    </tr>
+    ${open ? `<tr><td colspan="6" style="background:var(--steel-soft);">${renderCustomerHistoryPanel(c)}</td></tr>` : ''}
+  `;}).join('');
+
+  return `
+    <div class="card">
+      <div class="card-head">
+        <h2>客戶管理</h2>
+        <button class="btn-primary btn-sm" onclick="addCustomer()">＋ 新增客戶</button>
+      </div>
+      <div class="card-body">
+        <input class="catalog-search" id="customerSearchInput" placeholder="搜尋客戶編號 / 名稱..." value="${escapeHtml(customerSearch)}" style="margin-bottom:14px;max-width:320px;" oninput="customerSearch=this.value; renderAll();">
+        <div class="tbl-wrap">
+          <table class="tbl">
+            <thead><tr><th>客戶編號</th><th>客戶名稱</th><th>聯絡電話</th><th>傳真</th><th>Email</th><th>操作</th></tr></thead>
+            <tbody>${rows || `<tr><td colspan="6" class="muted" style="text-align:center;padding:20px;">尚無客戶資料,請點右上角新增</td></tr>`}</tbody>
+          </table>
+        </div>
+        <p class="hint" style="margin-top:10px;">「歷史報價」會列出這位客戶過去每一次報價單中出現過的機型、規格、售價與日期,方便回顧歷史成交行情。</p>
+      </div>
+    </div>
+  `;
+}
+
+/* ---- 報價單建立時選擇既有客戶,自動帶入資料 ---- */
+function selectCustomerForQuote(cid){
+  currentQuote.customerId = cid || null;
+  if(cid){
+    const c = catalog.customers.find(x=>x.id===cid);
+    if(c){
+      currentQuote.to = c.name || currentQuote.to;
+      currentQuote.tel = c.tel || currentQuote.tel;
+      currentQuote.fax = c.fax || currentQuote.fax;
+      currentQuote.cno = c.code || currentQuote.cno;
+    }
+  }
+  renderAll();
+}
+async function saveCurrentAsCustomer(){
+  if(!currentQuote.to){ toast('請先填寫客戶名稱(TO)'); return; }
+  const existing = catalog.customers.find(x=>x.name && x.name.trim()===currentQuote.to.trim());
+  if(existing){
+    currentQuote.customerId = existing.id;
+    toast('已連結到現有客戶「'+existing.name+'」');
+    renderAll();
+    return;
+  }
+  const c = {id:genId('cust'), code:currentQuote.cno||'', name:currentQuote.to, tel:currentQuote.tel||'', fax:currentQuote.fax||'', email:'', note:''};
+  catalog.customers.push(c);
+  currentQuote.customerId = c.id;
+  await saveCatalog(true);
+  renderAll();
+  toast('已將目前客戶資料存入客戶管理,可至該分頁補充 Email');
 }
 
 /* =========================================================
