@@ -219,7 +219,7 @@
     /* 關鍵修正:用 display:none 讓其他畫面真正離開版面(而非 visibility:hidden 讓它仍佔位),
        並讓報價單維持在正常文件流中,瀏覽器的分頁引擎才能正確依 page-break-after 分頁,
        不會把所有頁面內容擠壓成一長條、切出多餘或重複的頁面。 */
-    body{background:#fff !important;}
+    body{background:#fff !important; padding-top:0 !important; margin:0 !important;}
     body > *{ display:none !important; }
     #modalRoot{ display:block !important; }
     #modalRoot .modal-backdrop{
