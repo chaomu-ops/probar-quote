@@ -165,6 +165,8 @@
   /* ---------- print modal ---------- */
   .modal-backdrop{position:fixed; inset:0; background:rgba(15,20,28,.6); z-index:300; display:flex; align-items:flex-start; justify-content:center; padding:18px; overflow:auto;}
   .modal-toolbar{position:sticky; top:0; display:flex; justify-content:flex-end; gap:10px; max-width:210mm; margin:0 auto 12px; z-index:5; flex-wrap:wrap;}
+  .modal-toolbar .btn-ghost{background:#fff; color:var(--navy); border-color:#fff;}
+  .modal-toolbar .btn-ghost:hover{background:var(--steel-soft);}
   .print-pages{max-width:100%;}
   /* 列印文件一律用系統內建中文字型(不依賴網路字型),避免字型非同步載入造成分頁量測失準 */
   .print-sheet{
