@@ -167,6 +167,8 @@
   .modal-toolbar{position:sticky; top:0; display:flex; justify-content:flex-end; gap:10px; max-width:210mm; margin:0 auto 12px; z-index:5; flex-wrap:wrap;}
   .modal-toolbar .btn-ghost{background:#fff; color:var(--navy); border-color:#fff;}
   .modal-toolbar .btn-ghost:hover{background:var(--steel-soft);}
+  #userBadge .btn-ghost{background:rgba(255,255,255,.12); color:#fff; border-color:rgba(255,255,255,.35);}
+  #userBadge .btn-ghost:hover{background:rgba(255,255,255,.22);}
   .print-pages{max-width:100%;}
   /* 列印文件一律用系統內建中文字型(不依賴網路字型),避免字型非同步載入造成分頁量測失準 */
   .print-sheet{
@@ -256,6 +258,7 @@
     </div>
   </div>
   <div class="tabs" id="tabs"></div>
+  <div id="userBadge" style="display:flex;align-items:center;gap:8px;"></div>
 </div>
 
 <div class="container" id="app"></div>
@@ -338,6 +341,7 @@ let QuoteStore = null;       // 統一介面: {subscribe(cb), save(quote), remov
 let backendMode = 'none';    // 'artifact' | 'firebase' | 'none'
 let memFallback = { catalog:null };
 let firestoreDbRef = null;
+let currentUser = null;      // {email, name, photo} — 目前登入的 Google 帳號(僅 Firebase 模式使用)
 
 function loadScriptOnce(src){
   return new Promise((resolve, reject)=>{
@@ -348,15 +352,16 @@ function loadScriptOnce(src){
   });
 }
 
-async function initFirebaseStorage(){
+async function initFirebaseApp(){
   const V = '10.12.2';
   await loadScriptOnce(`https://www.gstatic.com/firebasejs/${V}/firebase-app-compat.js`);
   await loadScriptOnce(`https://www.gstatic.com/firebasejs/${V}/firebase-auth-compat.js`);
   await loadScriptOnce(`https://www.gstatic.com/firebasejs/${V}/firebase-firestore-compat.js`);
   if(!firebase.apps || !firebase.apps.length) firebase.initializeApp(FIREBASE_CONFIG);
-  await firebase.auth().signInAnonymously();
-  const db = firebase.firestore();
-  firestoreDbRef = db;
+  firestoreDbRef = firebase.firestore();
+}
+
+function buildFirestoreKvStorage(db){
   return {
     async get(key){
       const snap = await db.collection('kv').doc(key).get();
@@ -368,6 +373,55 @@ async function initFirebaseStorage(){
       return { key, value };
     }
   };
+}
+
+/* ---- Google 帳號登入 ---- */
+async function signInWithGoogle(){
+  try{
+    const provider = new firebase.auth.GoogleAuthProvider();
+    await firebase.auth().signInWithPopup(provider);
+    /* 登入結果由 onAuthStateChanged 監聽器接手處理,這裡不用做事 */
+  }catch(e){
+    console.error('Google 登入失敗', e);
+    let msg = 'Google 登入失敗,請再試一次。';
+    if(e && e.code === 'auth/unauthorized-domain') msg = 'Google 登入失敗:此網域尚未在 Firebase 主控台的「已授權網域」中加入,請聯絡系統管理員設定。';
+    else if(e && e.code === 'auth/operation-not-allowed') msg = 'Google 登入失敗:Firebase 主控台尚未啟用 Google 登入方式,請聯絡系統管理員設定。';
+    else if(e && e.code === 'auth/popup-blocked') msg = '瀏覽器封鎖了登入彈出視窗,請允許彈出視窗後再試一次。';
+    else if(e && e.code === 'auth/popup-closed-by-user') return; /* 使用者自行關閉,不用顯示錯誤 */
+    alert(msg);
+  }
+}
+async function signOutUser(){
+  try{ await firebase.auth().signOut(); }
+  catch(e){ console.error(e); }
+}
+
+function renderUserBadge(){
+  const el = document.getElementById('userBadge');
+  if(!el) return;
+  if(backendMode==='firebase' && currentUser){
+    el.innerHTML = `
+      ${currentUser.photo ? `<img src="${escapeHtml(currentUser.photo)}" alt="" style="width:26px;height:26px;border-radius:50%;">` : ''}
+      <span style="color:#cfe0ee;font-size:12.5px;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(currentUser.name || currentUser.email || '')}</span>
+      <button class="btn-ghost btn-sm" onclick="signOutUser()">登出</button>
+    `;
+  } else {
+    el.innerHTML = '';
+  }
+}
+
+function renderLoginScreen(){
+  document.getElementById('tabs').innerHTML = '';
+  renderUserBadge();
+  document.getElementById('app').innerHTML = `
+    <div class="card" style="max-width:420px;margin:60px auto;">
+      <div class="card-body" style="padding:40px 32px;text-align:center;">
+        <h2 style="margin-top:0;">請先登入</h2>
+        <p class="hint">此報價系統的資料為公司共用,需要使用 Google 帳號登入才能存取。</p>
+        <button class="btn-primary" style="margin-top:18px;padding:11px 22px;" onclick="signInWithGoogle()">使用 Google 帳號登入</button>
+      </div>
+    </div>
+  `;
 }
 
 /* ---- 報價單獨立存檔 + 即時同步:Firebase 版(用 Firestore onSnapshot 即時推播) ---- */
@@ -474,33 +528,14 @@ function buildMemoryQuoteStore(){
   };
 }
 
-async function initStorageBackend(){
-  if(HAS_ARTIFACT_STORAGE){
-    Storage = window.storage; backendMode = 'artifact';
-    QuoteStore = buildArtifactQuoteStore();
-    return;
-  }
-  if(HAS_FIREBASE_CONFIG){
-    try{
-      Storage = await initFirebaseStorage();
-      backendMode = 'firebase';
-      QuoteStore = buildFirebaseQuoteStore(firestoreDbRef);
-      return;
-    }catch(e){ console.error('Firebase 初始化失敗', e); Storage = null; backendMode = 'none'; }
-  }
-  Storage = null; backendMode = 'none';
-  QuoteStore = buildMemoryQuoteStore();
-}
-
 function backendLabel(){
   if(backendMode==='artifact') return 'Claude.ai 內建雲端儲存(共用,報價單約 10 秒同步一次)';
-  if(backendMode==='firebase') return 'Firebase Firestore(共用,報價單即時同步)';
+  if(backendMode==='firebase') return `Firebase Firestore(共用,報價單即時同步,已用 Google 帳號登入:${currentUser?escapeHtml(currentUser.email||''):''})`;
   if(HAS_FIREBASE_CONFIG) return 'Firebase 設定有誤或連線失敗,目前僅本機暫存';
   return '尚未設定雲端儲存,目前僅本機暫存(重新整理後資料會消失)';
 }
 
-async function loadAll(){
-  await initStorageBackend();
+async function startApp(){
   if(Storage){
     try{
       const r = await Storage.get('catalog', true);
@@ -516,10 +551,49 @@ async function loadAll(){
     if(loaded) renderAll();
   });
   loaded = true;
+  renderUserBadge();
   newQuote();
   renderAll();
   if(!Storage) toast('未偵測到雲端儲存,本次資料僅暫存於瀏覽器,關閉後將不會保留');
 }
+
+async function boot(){
+  if(HAS_ARTIFACT_STORAGE){
+    Storage = window.storage; backendMode = 'artifact';
+    QuoteStore = buildArtifactQuoteStore();
+    await startApp();
+    return;
+  }
+  if(HAS_FIREBASE_CONFIG){
+    document.getElementById('app').innerHTML = `<div class="empty">正在檢查登入狀態...</div>`;
+    try{
+      await initFirebaseApp();
+      firebase.auth().onAuthStateChanged(async (user)=>{
+        if(user){
+          currentUser = { email:user.email, name:user.displayName, photo:user.photoURL };
+          Storage = buildFirestoreKvStorage(firestoreDbRef);
+          backendMode = 'firebase';
+          QuoteStore = buildFirebaseQuoteStore(firestoreDbRef);
+          await startApp();
+        } else {
+          currentUser = null;
+          loaded = false;
+          renderLoginScreen();
+        }
+      });
+    }catch(e){
+      console.error('Firebase 初始化失敗', e);
+      Storage = null; backendMode = 'none';
+      QuoteStore = buildMemoryQuoteStore();
+      await startApp();
+    }
+    return;
+  }
+  Storage = null; backendMode = 'none';
+  QuoteStore = buildMemoryQuoteStore();
+  await startApp();
+}
+
 async function saveCatalog(silent){
   if(!Storage){ memFallback.catalog = catalog; if(!silent) toast('已暫存(未連接雲端儲存)'); return; }
   try{
@@ -2046,7 +2120,7 @@ function syncTopbarHeight(){
 /* =========================================================
    啟動
 ========================================================= */
-loadAll();
+boot();
 </script>
 </body>
 </html>
