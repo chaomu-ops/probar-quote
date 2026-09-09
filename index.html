@@ -569,7 +569,12 @@ async function boot(){
     try{
       await initFirebaseApp();
       firebase.auth().onAuthStateChanged(async (user)=>{
-        if(user){
+        if(user && user.isAnonymous){
+          /* 舊版本(匿名登入)留下的殘留登入狀態,不是真正的 Google 帳號,強制登出重新導回登入畫面 */
+          try{ await firebase.auth().signOut(); }catch(e){}
+          return;
+        }
+        if(user && user.email){
           currentUser = { email:user.email, name:user.displayName, photo:user.photoURL };
           Storage = buildFirestoreKvStorage(firestoreDbRef);
           backendMode = 'firebase';
